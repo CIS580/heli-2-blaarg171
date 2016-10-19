@@ -3,6 +3,7 @@
 /* Classes */
 const Game = require('./game');
 const Vector = require('./vector');
+const BulletPool = require("./BulletPool");
 
 /* Global variables */
 var canvas = document.getElementById('screen');
@@ -89,12 +90,12 @@ window.onkeydown = function(event) {
       event.preventDefault();
       break;
     case "ArrowLeft":
-    case "d":
+    case "a":
       input.left = true;
       event.preventDefault();
       break;
     case "ArrowRight":
-    case "a":
+    case "d":
       input.right = true;
       event.preventDefault();
       break;
