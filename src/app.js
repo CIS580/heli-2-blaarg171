@@ -1,20 +1,16 @@
 "use strict";
 
-/* Classes */
+/* Classes and Libraries */
 const Game = require('./game');
 const Vector = require('./vector');
-const BulletPool = require("./BulletPool");
+const Camera = require('./camera');
+const Player = require('./player');
+const BulletPool = require('./bullet_pool');
+
 
 /* Global variables */
 var canvas = document.getElementById('screen');
 var game = new Game(canvas, update, render);
-var player = {
-  angle: 0,
-  position: {x: 200, y: 200},
-  velocity: {x: 0, y: 0},
-  img: new Image()
-}
-player.img.src = 'assets/helicopter.png';
 var backgrounds = [
   new Image(),
   new Image(),
@@ -29,17 +25,14 @@ var input = {
   left: false,
   right: false
 }
-var camera = {
-  xMin: 100,
-  xMax: 500,
-  xOff: 100,
-  x: 0,
-  y: 0
-}
+var camera = new Camera(canvas);
 var reticule = {
   x: 0,
   y: 0
 }
+var bullets = new BulletPool(10);
+var missiles = [];
+var player = new Player(bullets, missiles);
 
 /**
  * @function onmousemove
@@ -57,20 +50,26 @@ window.onmousemove = function(event) {
  */
 window.onmousedown = function(event) {
   event.preventDefault();
-  reticule.x = event.offsetX;
-  reticule.y = event.offsetY;
-  // TODO: Fire bullet in direction of the retciule
+    if(event.button == 0) {
+    reticule.x = event.offsetX;
+    reticule.y = event.offsetY;
+    var direction = Vector.subtract(
+      reticule,
+      camera.toScreenCoordinates(player.position)
+    );
+    player.fireBullet(direction);
+  }
 }
 
 /**
  * @function oncontextmenu
  * Handles mouse right-click events
  */
-window.oncontextmenu = function(event) {
+canvas.oncontextmenu = function(event) {
   event.preventDefault();
   reticule.x = event.offsetX;
   reticule.y = event.offsetY;
-  // TODO: Fire missile
+  player.fireMissile();
 }
 
 /**
@@ -152,39 +151,30 @@ masterLoop(performance.now());
  * the number of milliseconds passed since the last frame.
  */
 function update(elapsedTime) {
-  var speed = 5;
 
-  // set the velocity
-  player.velocity.x = 0;
-  if(input.left) player.velocity.x -= speed;
-  if(input.right) player.velocity.x += speed;
-  player.velocity.y = 0;
-  if(input.up) player.velocity.y -= speed / 2;
-  if(input.down) player.velocity.y += speed * 2;
-
-  // determine player angle
-  player.angle = 0;
-  if(player.velocity.x < 0) player.angle = -Math.PI/8;
-  if(player.velocity.x > 0) player.angle = Math.PI/8;
-
-  // move the player
-  player.position.x += player.velocity.x;
-  player.position.y += player.velocity.y;
+  // update the player
+  player.update(elapsedTime, input);
 
   // update the camera
-  camera.xOff += player.velocity.x;
-  console.log(camera.xOff, camera.xMax, camera.xOff > camera.xMax)
-  if(camera.xOff > camera.xMax) {
-    camera.x += camera.xOff - camera.xMax;
-    camera.xOff = camera.xMax;
-  }
-  if(camera.xOff < camera.xMin) {
-    camera.x -= camera.xMin - camera.xOff;
-    camera.xOff = camera.xMin;
-  }
+  camera.update(player.position);
 
-  if(camera.x < 0) camera.x = 0;
+  // Update bullets
+  bullets.update(elapsedTime, function(bullet){
+    if(!camera.onScreen(bullet)) return true;
+    return false;
+  });
 
+  // Update missiles
+  var markedForRemoval = [];
+  missiles.forEach(function(missile, i){
+    missile.update(elapsedTime);
+    if(!camera.onScreen(missile.position))
+      markedForRemoval.unshift(i);
+  });
+  // Remove missiles that have gone off-screen
+  markedForRemoval.forEach(function(index){
+    missiles.splice(index, 1);
+  });
 }
 
 /**
@@ -195,29 +185,79 @@ function update(elapsedTime) {
   * @param {CanvasRenderingContext2D} ctx the context to render to
   */
 function render(elapsedTime, ctx) {
+
   // Render the backgrounds
+  renderBackgrounds(elapsedTime, ctx);
+
+  // Transform the coordinate system using
+  // the camera position BEFORE rendering
+  // objects in the world - that way they
+  // can be rendered in WORLD cooridnates
+  // but appear in SCREEN coordinates
   ctx.save();
+  ctx.translate(-camera.x, -camera.y);
+  renderWorld(elapsedTime, ctx);
+  ctx.restore();
+
+  // Render the GUI without transforming the
+  // coordinate system
+  renderGUI(elapsedTime, ctx);
+}
+
+/**
+  * @function renderBackgrounds
+  * Renders the parallax scrolling backgrounds.
+  * @param {DOMHighResTimeStamp} elapsedTime
+  * @param {CanvasRenderingContext2D} ctx the context to render to
+  */
+function renderBackgrounds(elapsedTime, ctx) {
+  ctx.save();
+
+  // The background scrolls at 2% of the foreground speed
   ctx.translate(-camera.x * 0.2, 0);
   ctx.drawImage(backgrounds[2], 0, 0);
   ctx.restore();
 
+  // The midground scrolls at 60% of the foreground speed
   ctx.save();
   ctx.translate(-camera.x * 0.6, 0);
   ctx.drawImage(backgrounds[1], 0, 0);
   ctx.restore();
 
+  // The foreground scrolls in sync with the camera
   ctx.save();
   ctx.translate(-camera.x, 0);
   ctx.drawImage(backgrounds[0], 0, 0);
   ctx.restore();
+}
 
-  // Render the player
-  ctx.save();
-  ctx.translate(player.position.x - camera.x, player.position.y);
-  ctx.rotate(player.angle);
-  ctx.drawImage(player.img, 0, 0, 131, 53, -60, 0, 131, 53);
-  ctx.restore();
+/**
+  * @function renderWorld
+  * Renders the entities in the game world
+  * IN WORLD COORDINATES
+  * @param {DOMHighResTimeStamp} elapsedTime
+  * @param {CanvasRenderingContext2D} ctx the context to render to
+  */
+function renderWorld(elapsedTime, ctx) {
+    // Render the bullets
+    bullets.render(elapsedTime, ctx);
 
+    // Render the missiles
+    missiles.forEach(function(missile) {
+      missile.render(elapsedTime, ctx);
+    });
+
+    // Render the player
+    player.render(elapsedTime, ctx);
+}
+
+/**
+  * @function renderGUI
+  * Renders the game's GUI IN SCREEN COORDINATES
+  * @param {DOMHighResTimeStamp} elapsedTime
+  * @param {CanvasRenderingContext2D} ctx
+  */
+function renderGUI(elapsedTime, ctx) {
   // Render the reticule
   ctx.save();
   ctx.translate(reticule.x, reticule.y);
