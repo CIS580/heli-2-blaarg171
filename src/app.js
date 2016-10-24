@@ -141,7 +141,6 @@ var masterLoop = function(timestamp) {
 }
 masterLoop(performance.now());
 
-
 /**
  * @function update
  * Updates the game state, moving
@@ -168,13 +167,14 @@ function update(elapsedTime) {
   var markedForRemoval = [];
   missiles.forEach(function(missile, i){
     missile.update(elapsedTime);
-    if(!camera.onScreen(missile.position))
+    if(Math.abs(missile.position.x - camera.x) > camera.width * 2)
       markedForRemoval.unshift(i);
   });
   // Remove missiles that have gone off-screen
   markedForRemoval.forEach(function(index){
     missiles.splice(index, 1);
   });
+  console.log(missiles.length)
 }
 
 /**
